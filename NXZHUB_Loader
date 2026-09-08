@@ -115,9 +115,9 @@ local CONFIG = {
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
 local Window = Rayfield:CreateWindow({
-    Name = "NXZ HUB | Multi-System",
+    Name = "NXZ HUB | Legacy Piece",
     LoadingTitle = "NXZ HUB",
-    LoadingSubtitle = "WHALE FINDER & LEGACY PIECE",
+    LoadingSubtitle = "Best Legac Piece Script",
     ConfigurationSaving = {
         Enabled = false
     }
@@ -427,4 +427,862 @@ local function sendWebhookNotification(itemName)
         ["color"] = 7864319,
         ["fields"] = {
             { ["name"] = "Player", ["value"] = Player.Name, ["inline"] = true },
-            { ["name"] = "Item Name", ["value"] = "```" .. tostring(itemName) .. "
+            { ["name"] = "Item Name", ["value"] = "```" .. tostring(itemName) .. "```", ["inline"] = true }
+        },
+        ["footer"] = { ["text"] = "NXZ HUB • Auto Farm Notifier" },
+        ["timestamp"] = DateTime.now():ToIsoDate()
+    }
+
+    local data = HttpService:JSONEncode({
+        ["username"] = "Chrono Farm Bot",
+        ["embeds"] = { embed }
+    })
+
+    pcall(function()
+        req({
+            Url = CONFIG.WebhookURL,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = data
+        })
+    end)
+end
+
+local function attachBackpackListener(backpack)
+    if not backpack then return end
+    ScriptConnections.BackpackChild = backpack.ChildAdded:Connect(function(child)
+        if child:IsA("Tool") and child.Name ~= CONFIG.SealWeaponName then
+            sendWebhookNotification(child.Name)
+        end
+    end)
+end
+
+task.spawn(function()
+    local backpack = Player:WaitForChild("Backpack", 10)
+    attachBackpackListener(backpack)
+    
+    ScriptConnections.BackpackResync = Player.CharacterAdded:Connect(function()
+        local newBackpack = Player:WaitForChild("Backpack", 10)
+        attachBackpackListener(newBackpack)
+    end)
+end)
+
+local currentLegacyTween = nil
+
+local function forceTweenTo(targetCFrame)
+    if not Character or not Root then
+        Character = Player.Character
+        if Character then Root = Character:FindFirstChild("HumanoidRootPart") end
+    end
+    if not Root then return false end
+
+    local humanoid = Character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+
+    Root.Anchored = false
+    local targetPos = typeof(targetCFrame) == "CFrame" and targetCFrame.Position or targetCFrame
+    local distance = (Root.Position - targetPos).Magnitude
+    local time = math.max(distance / CONFIG.TweenSpeed, 0.1)
+
+    if currentLegacyTween then
+        currentLegacyTween:Cancel()
+    end
+
+    local tweenInfo = TweenInfo.new(time, Enum.EasingStyle.Linear)
+    currentLegacyTween = TweenService:Create(Root, tweenInfo, {
+        CFrame = typeof(targetCFrame) == "CFrame" and targetCFrame or CFrame.new(targetPos)
+    })
+    
+    currentLegacyTween:Play()
+    currentLegacyTween.Completed:Wait()
+    return true
+end
+
+task.spawn(function()
+    while task.wait(3) do
+        if (CONFIG.AutoFarmEnabled or CONFIG.AutoKillEnabled) and Root then
+            local raycastParams = RaycastParams.new()
+            raycastParams.FilterAncestorsCases = {Character}
+            raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+            local rayResult = workspace:Raycast(Root.Position, Vector3.new(0, -30, 0), raycastParams)
+            
+            local folder = workspace:FindFirstChild(CONFIG.EnemyFolderName)
+            local hasActiveEnemies = false
+            if folder then
+                for _, enemy in ipairs(folder:GetChildren()) do
+                    local hum = enemy:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        hasActiveEnemies = true
+                        break
+                    end
+                end
+            end
+
+            if not hasActiveEnemies and not rayResult then
+                Root.Anchored = false
+                local groundCheck = workspace:Raycast(Root.Position, Vector3.new(0, -500, 0), raycastParams)
+                if groundCheck then
+                    Root.CFrame = CFrame.new(groundCheck.Position + Vector3.new(0, 3, 0))
+                end
+            end
+        end
+    end
+end)
+
+local function sanitizeString(str)
+    return string.lower(string.gsub(str, "%s+", ""))
+end
+
+local function isToolInCategory(toolName, category)
+    local sanitizedTool = sanitizeString(toolName)
+    local list = ITEM_DATABASE[category] or ITEM_DATABASE.Abilities
+
+    for _, dbItem in ipairs(list) do
+        local sanitizedDbItem = sanitizeString(dbItem)
+        if string.find(sanitizedTool, sanitizedDbItem) or string.find(sanitizedDbItem, sanitizedTool) then
+            return true
+        end
+    end
+    return false
+end
+
+local function fetchCombatTool()
+    if not Character then return nil end
+
+    for _, child in ipairs(Character:GetChildren()) do
+        if child:IsA("Tool") and child.Name ~= CONFIG.SealWeaponName then
+            if isToolInCategory(child.Name, CONFIG.SelectedCategory) then
+                return child
+            end
+        end
+    end
+
+    local backpack = Player:FindFirstChildOfClass("Backpack")
+    if backpack then
+        for _, child in ipairs(backpack:GetChildren()) do
+            if child:IsA("Tool") and child.Name ~= CONFIG.SealWeaponName then
+                if isToolInCategory(child.Name, CONFIG.SelectedCategory) then
+                    return child
+                end
+            end
+        end
+    end
+
+    local equipped = Character:FindFirstChildOfClass("Tool")
+    if equipped and equipped.Name ~= CONFIG.SealWeaponName then
+        return equipped
+    end
+
+    if backpack then
+        for _, child in ipairs(backpack:GetChildren()) do
+            if child:IsA("Tool") and child.Name ~= CONFIG.SealWeaponName then
+                return child
+            end
+        end
+    end
+
+    return nil
+end
+
+local function ensureToolEquipped(tool)
+    if not tool or not Character then return false end
+    local humanoid = Character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+
+    if tool.Parent ~= Character then
+        humanoid:EquipTool(tool)
+        task.wait(0.2)
+    end
+    return tool.Parent == Character
+end
+
+local function fireSkillRemote(tool, key)
+    if not tool or not Root or not InputRemote then return end
+    InputRemote:FireServer("Tool", tool, key, Root.Position)
+    InputRemote:FireServer("Skill", key)
+end
+
+local function getEnemies()
+    local enemies = {}
+    local folder = workspace:FindFirstChild(CONFIG.EnemyFolderName)
+    if not folder then return enemies end
+
+    for _, enemy in ipairs(folder:GetChildren()) do
+        local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+        local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy.PrimaryPart
+        if humanoid and enemyRoot and humanoid.Health > 0 then
+            table.insert(enemies, enemy)
+        end
+    end
+    return enemies
+end
+
+local function attackEnemy(enemy)
+    local skillIndex = 1
+
+    while enemy and enemy.Parent and CONFIG.AutoKillEnabled do
+        local myHumanoid = Character and Character:FindFirstChildOfClass("Humanoid")
+        if not myHumanoid or myHumanoid.Health <= 0 then break end
+
+        local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+        local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy.PrimaryPart
+        if not humanoid or humanoid.Health <= 0 or not enemyRoot then break end
+
+        forceTweenTo(enemyRoot.CFrame * CFrame.new(0, 0, CONFIG.BehindDistance))
+        if Root then Root.CFrame = CFrame.lookAt(Root.Position, enemyRoot.Position) end
+
+        local currentTool = fetchCombatTool()
+        if currentTool then
+            ensureToolEquipped(currentTool)
+
+            if CONFIG.AutoM1Enabled then
+                currentTool:Activate()
+                if InputRemote then
+                    InputRemote:FireServer("M1", currentTool, Root.Position)
+                    InputRemote:FireServer("Attack", currentTool)
+                    InputRemote:FireServer("Click")
+                end
+            end
+
+            if CONFIG.UseSkillsInCombat and #CONFIG.ActiveCombatSkillKeys > 0 then
+                local activeKey = CONFIG.ActiveCombatSkillKeys[skillIndex]
+                if activeKey then
+                    fireSkillRemote(currentTool, activeKey)
+                end
+                skillIndex = (skillIndex % #CONFIG.ActiveCombatSkillKeys) + 1
+            end
+        end
+
+        task.wait(CONFIG.AttackDelay)
+    end
+
+    if Root then Root.Anchored = false end
+end
+
+local function startAutoKillLoop()
+    task.spawn(function()
+        while true do
+            if CONFIG.AutoKillEnabled then
+                local myHumanoid = Character and Character:FindFirstChildOfClass("Humanoid")
+                if myHumanoid and myHumanoid.Health > 0 then
+                    local enemies = getEnemies()
+                    if #enemies > 0 then
+                        for _, enemy in ipairs(enemies) do
+                            if not CONFIG.AutoKillEnabled then break end
+                            if myHumanoid.Health <= 0 then break end
+                            if enemy.Parent then attackEnemy(enemy) end
+                        end
+                    end
+                end
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+
+local function getPartFromPrompt(prompt)
+    if not prompt then return nil end
+    local parent = prompt.Parent
+    if parent:IsA("BasePart") then
+        return parent
+    elseif parent:IsA("Model") then
+        return parent.PrimaryPart or parent:FindFirstChildWhichIsA("BasePart", true)
+    elseif parent:IsA("Attachment") then
+        return parent.Parent:IsA("BasePart") and parent.Parent or nil
+    end
+    return nil
+end
+
+local function findActivePrompt()
+    local realmFolder = workspace:FindFirstChild("Realm Beyond Heaven")
+    if realmFolder then
+        local sealFolder = realmFolder:FindFirstChild("Chrono Seal")
+        if sealFolder then
+            for _, obj in ipairs(sealFolder:GetDescendants()) do
+                if obj:IsA("ProximityPrompt") and obj.Enabled then
+                    local targetPart = getPartFromPrompt(obj)
+                    if targetPart then
+                        return obj, targetPart
+                    end
+                end
+            end
+        end
+    end
+
+    local closestPrompt, closestPart = nil, nil
+    local shortestDistance = math.huge
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Enabled then
+            local targetPart = getPartFromPrompt(obj)
+            if targetPart and Root then
+                local dist = (Root.Position - targetPart.Position).Magnitude
+                if dist < shortestDistance then
+                    shortestDistance = dist
+                    closestPrompt = obj
+                    closestPart = targetPart
+                end
+            end
+        end
+    end
+
+    return closestPrompt, closestPart
+end
+
+local function doChronoPuzzle()
+    local prompt, promptPart = nil, nil
+    for scanAttempt = 1, 3 do
+        prompt, promptPart = findActivePrompt()
+        if prompt and promptPart then break end
+        task.wait(0.3)
+    end
+
+    if not prompt or not promptPart then return false end
+
+    local targetPosition = promptPart.Position + Vector3.new(0, 3, 0)
+    forceTweenTo(targetPosition)
+    task.wait(0.2)
+
+    local maxRetries, retryCount = 3, 0
+    while retryCount < maxRetries do
+        if not Root then break end
+        if (Root.Position - promptPart.Position).Magnitude <= 8 then break end
+        forceTweenTo(targetPosition)
+        task.wait(0.3)
+        retryCount = retryCount + 1
+    end
+
+    if not Root or (Root.Position - promptPart.Position).Magnitude > 8 then return false end
+
+    local sealTool = Character:FindFirstChild(CONFIG.SealWeaponName)
+    if not sealTool then
+        local backpack = Player:FindFirstChildOfClass("Backpack")
+        if backpack then
+            sealTool = backpack:FindFirstChild(CONFIG.SealWeaponName)
+        end
+    end
+
+    if sealTool then
+        ensureToolEquipped(sealTool)
+        task.wait(0.2)
+        
+        sealTool:Activate()
+        fireSkillRemote(sealTool, CONFIG.SealSkillKey)
+        task.wait(0.3)
+    end
+
+    if fireproximityprompt then
+        fireproximityprompt(prompt, 0)
+    else
+        prompt:InputHoldBegin()
+        task.wait(prompt.HoldDuration or 0.1)
+        prompt:InputHoldEnd()
+    end
+
+    task.wait(1.5)
+    return true
+end
+
+local function startAutoFarmLoop()
+    task.spawn(function()
+        while true do
+            if CONFIG.AutoFarmEnabled then
+                for i = 1, CONFIG.PuzzleCount do
+                    if not CONFIG.AutoFarmEnabled then break end
+
+                    local success, attempts = false, 0
+                    while not success and CONFIG.AutoFarmEnabled and attempts < 10 do
+                        success = doChronoPuzzle()
+                        if not success then
+                            attempts = attempts + 1
+                            task.wait(1.5)
+                        end
+                    end
+
+                    task.wait(CONFIG.BossDelay)
+                end
+            end
+            task.wait(2)
+        end
+    end)
+end
+
+local MainTab = Window:CreateTab("Main", 4483362458)
+local DungeonTab = Window:CreateTab("Dungeon", 4483362458)
+local WeaponTab = Window:CreateTab("Combat & Weapons", 4483362458)
+local WebhookTab = Window:CreateTab("Webhook", 4483362458)
+local SettingsTab = Window:CreateTab("Settings", 4483362458)
+
+MainTab:CreateSection("Dashboard")
+
+local StatusLabel = MainTab:CreateLabel("Status: 🔴 Whale not Spawned")
+local JobLabel = MainTab:CreateLabel("Job ID: " .. tostring(game.JobId))
+local PlayerLabel = MainTab:CreateLabel("Players: " .. tostring(#Players:GetPlayers()))
+
+MainTab:CreateSection("Setup")
+
+local AutoFindToggle = MainTab:CreateToggle({
+    Name = "Auto Find Whale",
+    CurrentValue = false,
+    Callback = function(Value)
+        AutoFindWhale = Value
+        if not Value then
+            stopCharacterMovement()
+        end
+    end
+})
+
+local AutoFishToggle = MainTab:CreateToggle({
+    Name = "Enable Auto Fishing",
+    CurrentValue = false,
+    Callback = function(Value)
+        EnableAutoFishing = Value
+        if Value then
+            enableAndVerifyAutoFish(3)
+        end
+    end
+})
+
+local AutoHopToggle = MainTab:CreateToggle({
+    Name = "Auto Server Hop",
+    CurrentValue = false,
+    Callback = function(Value)
+        AutoHop = Value
+    end
+})
+
+DungeonTab:CreateSection("Setup")
+
+DungeonTab:CreateToggle({
+   Name = "Auto Chrono Seals",
+   CurrentValue = false,
+   Flag = "AutoFarmToggle",
+   Callback = function(Value)
+      CONFIG.AutoFarmEnabled = Value
+      if Value then startAutoFarmLoop() end
+   end,
+})
+
+DungeonTab:CreateToggle({
+   Name = "Auto Farm Dungeon",
+   CurrentValue = false,
+   Flag = "AutoKillToggle",
+   Callback = function(Value)
+      CONFIG.AutoKillEnabled = Value
+      if Value then startAutoKillLoop() end
+   end,
+})
+
+WeaponTab:CreateSection("Weapon Type")
+
+WeaponTab:CreateDropdown({
+   Name = "Combat Category Locator",
+   Options = {"Abilities", "Weapons", "Styles"},
+   CurrentOption = {"Abilities"},
+   MultipleOptions = false,
+   Flag = "CategoryLocatorDropdown",
+   Callback = function(Selected)
+      local category = Selected[1] or Selected
+      CONFIG.SelectedCategory = category
+   end,
+})
+
+WeaponTab:CreateSection("Attacks & Abilities")
+
+WeaponTab:CreateToggle({
+   Name = "Auto M1 (Light Attack)",
+   CurrentValue = false,
+   Flag = "AutoM1Toggle",
+   Callback = function(Value)
+      CONFIG.AutoM1Enabled = Value
+   end,
+})
+
+WeaponTab:CreateToggle({
+   Name = "Use Skills in Combat",
+   CurrentValue = false,
+   Flag = "CombatSkillsToggle",
+   Callback = function(Value)
+      CONFIG.UseSkillsInCombat = Value
+   end,
+})
+
+WeaponTab:CreateDropdown({
+   Name = "Combat Skills",
+   Options = {"Z", "X", "C", "V", "F", "B"},
+   CurrentOption = {},
+   MultipleOptions = true,
+   Flag = "CombatSkillsDropdown",
+   Callback = function(SelectedOptions)
+      CONFIG.ActiveCombatSkillKeys = SelectedOptions
+   end,
+})
+
+WebhookTab:CreateSection("Setup")
+
+WebhookTab:CreateToggle({
+   Name = "Webhook",
+   CurrentValue = false,
+   Flag = "WebhookToggle",
+   Callback = function(Value)
+      CONFIG.WebhookEnabled = Value
+   end,
+})
+
+WebhookTab:CreateInput({
+   Name = "Discord Webhook URL",
+   PlaceholderText = "https://discord.com/api/webhooks/...",
+   RemoveTextOnFocusLost = false,
+   Callback = function(Text)
+      CONFIG.WebhookURL = Text
+   end,
+})
+
+WebhookTab:CreateButton({
+   Name = "Send Test Webhook",
+   Callback = function()
+      if CONFIG.WebhookURL ~= "" then
+          sendWebhookNotification("Test Item (Verification)")
+      end
+   end,
+})
+
+SettingsTab:CreateSection("Setup")
+
+local function GetConfigList()
+    local list = {}
+    if isfolder and isfolder(FOLDER_NAME) then
+        for _, file in ipairs(listfiles(FOLDER_NAME)) do
+            if file:sub(-5) == ".json" and not file:find("autoload.txt") then
+                local filename = file:match("([^/\\]+)%.json$")
+                if filename then
+                    table.insert(list, filename)
+                end
+            end
+        end
+    end
+    if #list == 0 then
+        table.insert(list, "---")
+    end
+    return list
+end
+
+local ConfigListDropdown
+
+local function RefreshDropdown()
+    if ConfigListDropdown then
+        ConfigListDropdown:Refresh(GetConfigList())
+    end
+end
+
+local AutoSaveTextLabel
+local AutoloadTextLabel
+
+local function SaveConfigFile(name)
+    if name == "" or name == "---" then return end
+    local data = {
+        AutoFindWhale = AutoFindWhale,
+        EnableAutoFishing = EnableAutoFishing,
+        AutoHop = AutoHop,
+        CONFIG = CONFIG
+    }
+    local filePath = FOLDER_NAME .. "/" .. name .. ".json"
+    if writefile then
+        writefile(filePath, HttpService:JSONEncode(data))
+        RefreshDropdown()
+    end
+end
+
+local function LoadConfigFile(name)
+    if name == "" or name == "---" then return end
+    local filePath = FOLDER_NAME .. "/" .. name .. ".json"
+    if isfile and isfile(filePath) and readfile then
+        local success, decoded = pcall(function()
+            return HttpService:JSONDecode(readfile(filePath))
+        end)
+        if success and decoded then
+            if AutoFindToggle then AutoFindToggle:Set(decoded.AutoFindWhale or false) end
+            if AutoFishToggle then AutoFishToggle:Set(decoded.EnableAutoFishing or false) end
+            if AutoHopToggle then AutoHopToggle:Set(decoded.AutoHop or false) end
+            if decoded.CONFIG then
+                for k, v in pairs(decoded.CONFIG) do
+                    CONFIG[k] = v
+                end
+            end
+        end
+    end
+end
+
+SettingsTab:CreateInput({
+    Name = "Config name",
+    PlaceholderText = "Enter config name...",
+    RemoveTextOnFocusLost = false,
+    Callback = function(Text)
+        NewConfigName = Text
+    end
+})
+
+SettingsTab:CreateButton({
+    Name = "Create config",
+    Callback = function()
+        if NewConfigName ~= "" then
+            SaveConfigFile(NewConfigName)
+            SelectedConfig = NewConfigName
+            if ConfigListDropdown then
+                ConfigListDropdown:Set({SelectedConfig})
+            end
+        end
+    end
+})
+
+ConfigListDropdown = SettingsTab:CreateDropdown({
+    Name = "Config list",
+    Options = GetConfigList(),
+    CurrentOption = {"---"},
+    MultipleOptions = false,
+    Callback = function(Option)
+        if type(Option) == "table" then
+            SelectedConfig = Option[1] or ""
+        else
+            SelectedConfig = Option
+        end
+    end
+})
+
+SettingsTab:CreateButton({
+    Name = "Load config",
+    Callback = function()
+        LoadConfigFile(SelectedConfig)
+    end
+})
+
+SettingsTab:CreateButton({
+    Name = "Overwrite config",
+    Callback = function()
+        if SelectedConfig ~= "" and SelectedConfig ~= "---" then
+            SaveConfigFile(SelectedConfig)
+        end
+    end
+})
+
+SettingsTab:CreateButton({
+    Name = "Delete config",
+    Callback = function()
+        if SelectedConfig ~= "" and SelectedConfig ~= "---" then
+            local filePath = FOLDER_NAME .. "/" .. SelectedConfig .. ".json"
+            if isfile and isfile(filePath) and delfile then
+                delfile(filePath)
+                SelectedConfig = ""
+                RefreshDropdown()
+            end
+        end
+    end
+})
+
+SettingsTab:CreateButton({
+    Name = "Refresh list",
+    Callback = function()
+        RefreshDropdown()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "Auto Save Config",
+    CurrentValue = false,
+    Callback = function(Value)
+        AutoSaveConfig = Value
+        if Value and SelectedConfig ~= "" and SelectedConfig ~= "---" then
+            CurrentAutoSave = SelectedConfig
+        else
+            CurrentAutoSave = "none"
+        end
+        if AutoSaveTextLabel then
+            AutoSaveTextLabel:Set("Current auto-save config: " .. CurrentAutoSave)
+        end
+    end
+})
+
+SettingsTab:CreateButton({
+    Name = "Set as autoload",
+    Callback = function()
+        if SelectedConfig ~= "" and SelectedConfig ~= "---" then
+            if writefile then
+                writefile(FOLDER_NAME .. "/autoload.txt", SelectedConfig)
+                CurrentAutoload = SelectedConfig
+                if AutoloadTextLabel then
+                    AutoloadTextLabel:Set("Current autoload config: " .. CurrentAutoload)
+                end
+            end
+        end
+    end
+})
+
+SettingsTab:CreateButton({
+    Name = "Reset autoload",
+    Callback = function()
+        if isfile and isfile(FOLDER_NAME .. "/autoload.txt") and delfile then
+            delfile(FOLDER_NAME .. "/autoload.txt")
+        end
+        CurrentAutoload = "none"
+        if AutoloadTextLabel then
+            AutoloadTextLabel:Set("Current autoload config: " .. CurrentAutoload)
+        end
+    end
+})
+
+AutoSaveTextLabel = SettingsTab:CreateLabel("Current auto-save config: none")
+AutoloadTextLabel = SettingsTab:CreateLabel("Current autoload config: none")
+
+SettingsTab:CreateSection("Configurations")
+
+SettingsTab:CreateSlider({
+   Name = "Tween Speed",
+   Range = {30, 200},
+   Increment = 5,
+   CurrentValue = CONFIG.TweenSpeed,
+   Flag = "TweenSpeedSlider",
+   Callback = function(Value) CONFIG.TweenSpeed = Value end,
+})
+
+SettingsTab:CreateSlider({
+   Name = "Behind Enemy Distance",
+   Range = {1, 15},
+   Increment = 1,
+   CurrentValue = CONFIG.BehindDistance,
+   Flag = "DistanceSlider",
+   Callback = function(Value) CONFIG.BehindDistance = Value end,
+})
+
+SettingsTab:CreateSlider({
+   Name = "Attack Delay",
+   Range = {0.05, 1},
+   Increment = 0.05,
+   CurrentValue = CONFIG.AttackDelay,
+   Flag = "AttackDelaySlider",
+   Callback = function(Value) CONFIG.AttackDelay = Value end,
+})
+
+SettingsTab:CreateSection("Misc")
+
+SettingsTab:CreateButton({
+    Name = "🔴 Unload Script",
+    Callback = function()
+        Scanning = false
+        CONFIG.AutoFarmEnabled = false
+        CONFIG.AutoKillEnabled = false
+        CONFIG.AutoM1Enabled = false
+        CONFIG.WebhookEnabled = false
+
+        stopCharacterMovement()
+
+        if currentLegacyTween then
+            currentLegacyTween:Cancel()
+        end
+
+        for name, conn in pairs(ScriptConnections) do
+            if conn and typeof(conn) == "RBXScriptConnection" then
+                conn:Disconnect()
+            end
+        end
+        ScriptConnections = {}
+
+        if antiAfkThread then
+            task.cancel(antiAfkThread)
+        end
+
+        Rayfield:Destroy()
+    end
+})
+
+task.spawn(function()
+    task.wait(1)
+    if isfile and isfile(FOLDER_NAME .. "/autoload.txt") and readfile then
+        local autoName = readfile(FOLDER_NAME .. "/autoload.txt")
+        if autoName and autoName ~= "" then
+            CurrentAutoload = autoName
+            if AutoloadTextLabel then
+                AutoloadTextLabel:Set("Current autoload config: " .. CurrentAutoload)
+            end
+            LoadConfigFile(autoName)
+        end
+    end
+end)
+
+task.spawn(function()
+    while Scanning do
+        task.wait(CHECK_DELAY)
+
+        if AutoSaveConfig and CurrentAutoSave ~= "none" then
+            SaveConfigFile(CurrentAutoSave)
+        end
+
+        local whale = getWhale()
+
+        if whale then
+            StatusLabel:Set("Status: 🟢 Whale Spawned")
+
+            if AutoFindWhale then
+                if not isNearWhale(whale) then
+                    tweenToWhale(whale)
+                else
+                    stopCharacterMovement()
+                end
+            end
+
+            if EnableAutoFishing then
+                forceEquipRod()
+                task.wait(0.5)
+                enableAndVerifyAutoFish(5)
+            end
+
+            sendDiscordNotification()
+
+            repeat
+                local currentWhale = getWhale()
+
+                if currentWhale and AutoFindWhale then
+                    if isNearWhale(currentWhale) then
+                        if CurrentWhaleTween then
+                            stopCharacterMovement()
+                        end
+                    else
+                        if not CurrentWhaleTween then
+                            task.spawn(function()
+                                tweenToWhale(currentWhale)
+                                if EnableAutoFishing then
+                                    forceEquipRod()
+                                end
+                            end)
+                        end
+                    end
+                end
+
+                if EnableAutoFishing and not isAutoFishingActive() then
+                    enableAndVerifyAutoFish(1)
+                end
+
+                task.wait(1)
+            until not getWhale() or not Scanning
+
+            if not Scanning then break end
+
+            stopCharacterMovement()
+            StatusLabel:Set("Status: 🔴 Whale not Spawned")
+            task.wait(2)
+
+            if AutoHop then
+                hopServer()
+                break
+            end
+        else
+            StatusLabel:Set("Status: 🔴 Whale not Spawned")
+            task.wait(1)
+
+            if AutoHop then
+                hopServer()
+                break
+            end
+        end
+    end
+end)
